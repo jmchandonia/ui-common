@@ -66,10 +66,15 @@
                             url+="/methods/"+self.options.id;
                         }
 
+                        //truncate out the commit comments. We're guesing about where those start...
+                        //assume first four lines are valid header info.
+                        var commit = status.git_spec_commit.split(/\r\n|\r|\n/);
+                        commit = [ commit[0], commit[1], commit[2], commit[3] ].join('<br>\n');
+
 
                         self.$narMethodStoreInfo.append(
                             $('<table>').css({border:'1px solid #bbb', margin:'10px', padding:'10px'})
-                                .append($('<tr>')
+                                /*.append($('<tr>')
                                             .append($('<th>').append('Method Store URL  '))
                                             .append($('<td>').append(self.options.narrativeStoreUrl)))
                                 .append($('<tr>')
@@ -77,13 +82,13 @@
                                             .append($('<td>').append(status.git_spec_url)))
                                 .append($('<tr>')
                                             .append($('<th>').append('Method Spec Branch  '))
-                                            .append($('<td>').append(status.git_spec_branch)))
+                                            .append($('<td>').append(status.git_spec_branch)))*/
                                 .append($('<tr>')
-                                            .append($('<th>').append('Yaml/Spec Location '))
+                                            .append($('<th style = "vertical-align : top; padding-right : 5px">').append('Yaml/Spec Location '))
                                             .append($('<td>').append('<a href="'+url+'" target="_blank">'+url+"</a>")))
                                 .append($('<tr>')
-                                            .append($('<th>').append('Method Spec Commit  '))
-                                            .append($('<td>').append(status.git_spec_commit.replace(/(?:\r\n|\r|\n)/g, '<br>'))))
+                                            .append($('<th style = "vertical-align : top; padding-right : 5px">').append('Method Spec Commit  '))
+                                            .append($('<td>').append(commit)))
                                 );
                     },
                     function(err) {
@@ -272,8 +277,31 @@
                     $ssPanel
                         .append(
                             $.jqElem('a')
-                                .attr('href', self.options.narrativeStoreUrl + s.url)
-                                .attr('target', '_blank')
+                                //.attr('href', self.options.narrativeStoreUrl + s.url)
+                                //.attr('target', '_blank')
+                                .on('click', function(e) {
+
+                                    var $img = $.jqElem('img')
+                                        .attr('src', self.options.narrativeStoreUrl + s.url)
+                                        .css('width', '100%')
+                                    ;
+
+                                    var $prompt = $.jqElem('div').kbasePrompt(
+                                        {
+                                            body : $img
+                                        }
+                                    );
+
+                                    $prompt.dialogModal()
+                                        .css('width', '100%')
+                                    ;
+
+                                    $prompt.dialogModal().find('.modal-dialog')
+                                        .css('width', '100%')
+                                    ;
+
+                                    $prompt.openPrompt();
+                                })
                                 .append(
                                     $.jqElem('img')
                                         .attr('src', self.options.narrativeStoreUrl + s.url)
@@ -414,7 +442,6 @@
 	            )
 	    };
 
-
 	    //if (m['ver']) {
 		//$basicInfo.append('<div><strong>Version: </strong>&nbsp&nbsp'+m['ver']+"</div>");
 	    //}
@@ -486,12 +513,34 @@
             $.each(
                 m.screenshots,
                 function (idx, s) {
-
                     $ssPanel
                         .append(
                             $.jqElem('a')
-                                .attr('href', self.options.narrativeStoreUrl + s.url)
-                                .attr('target', '_blank')
+                                //.attr('href', self.options.narrativeStoreUrl + s.url)
+                                //.attr('target', '_blank')
+                                .on('click', function(e) {
+
+                                    var $img = $.jqElem('img')
+                                        .attr('src', self.options.narrativeStoreUrl + s.url)
+                                        .css('width', '100%')
+                                    ;
+
+                                    var $prompt = $.jqElem('div').kbasePrompt(
+                                        {
+                                            body : $img
+                                        }
+                                    );
+
+                                    $prompt.dialogModal()
+                                        .css('width', '100%')
+                                    ;
+
+                                    $prompt.dialogModal().find('.modal-dialog')
+                                        .css('width', '100%')
+                                    ;
+
+                                    $prompt.openPrompt();
+                                })
                                 .append(
                                     $.jqElem('img')
                                         .attr('src', self.options.narrativeStoreUrl + s.url)
@@ -503,6 +552,7 @@
 
             self.$mainPanel.append($ssPanel);
         }
+
 
         if (m.description) {
             self.$mainPanel
@@ -528,7 +578,107 @@
 
             var $parametersDiv =
                 $.jqElem('div')
-                    .append($.jqElem('h4').append('Parameters'))
+                //    .append($.jqElem('h4').append('Parameters'))
+            ;
+
+            var $paramList = $.jqElem('ul')
+                .css('list-style-type', 'none')
+                .css('padding-left', '0px')
+            ;
+            $parametersDiv.append($paramList);
+
+            var sortedParams = {
+                inputs       : [],
+                outputs      : [],
+                parameters   : []
+            };
+
+            $.each(
+                spec.parameters,
+                function (idx, param) {
+                    if (param.ui_class == 'input') {
+                        sortedParams.inputs.push(param);
+                    }
+                    else if (param.ui_class == 'output') {
+                        sortedParams.outputs.push(param);
+                    }
+                    else {
+                        sortedParams.parameters.push(param);
+                    }
+                }
+            );
+
+            var ucfirst = function(string) {
+                if (string != undefined && string.length) {
+                    return string.charAt(0).toUpperCase() + string.slice(1);
+                }
+            }
+
+            $.each(
+                ['inputs', 'outputs', 'parameters'],
+                function (idx, ui_class) {
+
+                    if (sortedParams[ui_class].length == 0) {
+                        return;
+                    };
+
+                    var $li = $.jqElem('li').append($.jqElem('h4').append(ucfirst(ui_class)));
+                    var $ui_classList = $.jqElem('ul')
+                        .css('list-style-type', 'none')
+                        .css('padding-left', '0px')
+                    ;
+                    $li.append($ui_classList);
+                    $paramList.append($li);
+
+                    $.each(
+                        sortedParams[ui_class],
+                        function (idx, param) {
+
+                            var types = '';
+
+                            if (param.text_options && param.text_options.valid_ws_types) {
+                                types = $.jqElem('i')
+                                    .append(' ' + param.text_options.valid_ws_types.join(', '))
+                                ;
+                            }
+
+                            var $li = $.jqElem('li');//.append('Parameter ' + (idx + 1)));
+                            $li.append(
+                                $.jqElem('ul')
+                                    .css('list-style-type', 'none')
+                                        .append(
+                                            $.jqElem('li')
+                                                .append(
+                                                    $.jqElem('b').append(param.ui_name)
+                                                )
+                                                .append(types)
+                                                .append(
+                                                    $.jqElem('ul')
+                                                        .css('list-style-type', 'none')
+                                                        .append($.jqElem('li').append(param.short_hint))
+                                                        .append($.jqElem('li').append(param.long_hint))
+                                                )
+                                        )
+                            );
+
+                            $ui_classList.append($li);
+                        }
+                    );
+
+
+                }
+            );
+
+            self.$mainPanel.append($parametersDiv.append('<hr>'));
+
+
+        }
+
+        if (spec.fixed_parameters && spec.fixed_parameters.length) {
+
+            var $parametersDiv =
+                $.jqElem('div')
+                    .append($.jqElem('h4').append('Fixed parameters'))
             ;
 
             var $paramList = $.jqElem('ul')
@@ -538,7 +688,7 @@
             $parametersDiv.append($paramList);
 
             $.each(
-                spec.parameters,
+                spec.fixed_parameters,
                 function (idx, param) {
                     var $li = $.jqElem('li');//.append('Parameter ' + (idx + 1)));
                     $li.append(
@@ -552,8 +702,7 @@
                                         .append(
                                             $.jqElem('ul')
                                                 .css('list-style-type', 'none')
-                                                .append($.jqElem('li').append(param.short_hint))
-                                                .append($.jqElem('li').append(param.long_hint))
+                                                .append($.jqElem('li').append(param.description))
                                         )
                                 )
                     );
@@ -597,7 +746,7 @@
             self.$mainPanel.append($pubsDiv.append($publications));
         }
 
-        if (m.kb_contributors.length) {
+        if (m.kb_contributors != undefined && m.kb_contributors.length) {
             var $contributorsDiv =
                 $.jqElem('div')
                     .append($.jqElem('strong').append('Team members'))
