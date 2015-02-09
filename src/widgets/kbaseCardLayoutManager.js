@@ -13,22 +13,22 @@
 (function( $, undefined ) {
     $.KBWidget({
         name: "KBaseCardLayoutManager",
-        parent: "kbaseWidget",
+        parent: "kbaseAuthenticatedWidget",
         version: "1.0.0",
         options: {
             template: null,
             data: {},
             auth: null,
             userId: null,
-            loadingImage: "http://narrative.kbase.us/landing/widgets/images/ajax-loader.gif",
+            loadingImage: "./assets/images/ajax-loader.gif",
         },
         cardIndex: 0,
         cards: {},
         cdmWorkspace: "CDS",
         defaultWidth: 300,
 
-        workspaceURL: "https://www.kbase.us/services/workspace",
         fbaURL: "https://www.kbase.us/services/fba_model_services",
+        workspaceURL: "https://kbase.us/services/ws",
         workspaceClient: null,
         fbaClient: null,        // used to export CDS genomes to workspace.
 
@@ -38,10 +38,7 @@
         init: function(options) {
             this._super(options);
 
-            this.dbg('user:' + this.options.userId);
-            this.dbg('token:' + this.options.auth);
-
-            this.workspaceClient = new workspaceService(this.workspaceURL);
+            $.data(this.$elem[0], "KBaseCardLayoutManager", true);
             this.fbaClient = new fbaModelServices(this.fbaURL);
 
             $.ui.dialog.prototype._makeDraggable = function() {
@@ -69,11 +66,38 @@
             $(document).on("kbaseCardClosed", function(event, id) {
                 self.cardClosed(id);
             });
+            //console.log(this.options);
 
             this.render();
             this.registerEvents();
             this.showInitialCards();
             return this;
+        },
+
+        reInit: function(options) {
+            console.log('reiniting card manager');
+            console.log(this.options);
+            for (var opt in options) {
+                this.options[opt] = options[opt];
+            }
+            console.log(this.options);
+            this.closeAllCards();
+            this.showInitialCards();
+
+        },
+
+        loggedInCallback: function(event, auth) {
+            this.options.auth = auth.token;
+            this.options.userId = auth.user_id;
+            this.wsClient = new Workspace(this.workspaceURL, auth);
+            this.refreshWorkspaceSelector();
+        },
+
+        loggedOutCallback: function(event, auth) {
+            this.options.auth = null;
+            this.options.userId = null;
+            this.wsClient = null;
+            this.refreshWorkspaceSelector();
         },
 
         /**
@@ -84,9 +108,29 @@
             $("#app").append(this.$controlBox);
 
             this.initExportModal();
+            this.refreshWorkspaceSelector();
             this.$elem.append(this.exportModal.modal);
 
             return this;
+        },
+
+        initUnderConstructionModal: function() {
+            var $modal = $("<div class='modal fade'>")
+                         .append($("<div class='modal-dialog'>")
+                                 .append($("<div class='modal-content'>")
+                                         .append($("<div class='modal-header'>")
+                                                 .append($("<h4 class='modal-title'>Under Construction</h4>"))
+                                                )
+                                         .append($("<div class='modal-body'>")
+                                                 .append($("<div class='row '>")
+                                                         .append($("<div class='col-md-1 alert alert-warning'><span class='glyphicon glyphicon-warning-sign' style='font-size:16pt'></span></div>"))
+                                                         .append($("<div class='col-md-11'> Sorry, exporting from these data pages to your workspace is currently unavailable. Please use the <a href='/functional-site/#/ws/' class='alert-link'>Workspace Browser</a> or the Search page.</div>"))))
+                                         .append($("<div class='modal-footer'>")
+                                                 .append($("<button type='button' class='btn btn-primary' data-dismiss='modal'>OK</button>"))
+                                                 )
+                                         )
+                                 );
+            return $modal;
         },
 
         /**
@@ -100,16 +144,32 @@
          *   loadingDiv: exported so it can be readily added/removed from the modal body.
          */
         initExportModal: function() {
-            var $body = $("<div class='modal-body'></div>");
             var $okButton = $("<button type='button' class='btn btn-primary'>Export</button>");
-
+            var $wsSelector = $("<select>")
+                              .addClass("form-control select-ws");
+            var $validWsDataBody = $("<form>")
+                                   .addClass("form-horizontal")
+                                   .attr("role", "form")
+                                   .append($("<div>")
+                                           .addClass("form-group")
+                                           .append($("<label>")
+                                                   .addClass("col-sm-5 control-label")
+                                                   .append("Destination Workspace"))
+                                           .append($("<div>")
+                                                   .addClass("col-sm-5")
+                                                   .append($wsSelector)));
+            var $errorBody = $("<div>")
+                             .addClass("alert alert-danger");
             var $modal = $("<div class='modal fade'>")
                          .append($("<div class='modal-dialog'>")
                                  .append($("<div class='modal-content'>")
                                          .append($("<div class='modal-header'>")
                                                  .append($("<h4 class='modal-title'>Export data?</h4>"))
                                                 )
-                                         .append($body)
+                                         .append($("<div class='modal-body'></div>")
+                                                 .append($validWsDataBody.hide())
+                                                 .append($errorBody.hide())
+                                                )
                                          .append($("<div class='modal-footer'>")
                                                  .append($("<button type='button' class='btn btn-default' data-dismiss='modal'>Cancel</button>"))
                                                  .append($okButton)
@@ -120,13 +180,50 @@
             var $loadingDiv = $("<div style='width: 100%; text-align: center; padding: 20px'><img src='" + this.options.loadingImage + "'/><br/>Exporting data. This may take a moment...</div>");
 
             var exportModal = {
-                modal: $modal,
-                body: $body,
+                modal: this.initUnderConstructionModal(), //$modal,
                 okButton: $okButton,
-                loadingDiv: $loadingDiv
+                loadingDiv: $loadingDiv,
+                wsSelector: $wsSelector,
+                errorBody: $errorBody,
+                wsDataBody: $validWsDataBody,
             };
 
             this.exportModal = exportModal;
+        },
+
+        /**
+         * Refreshes the workspace selector.
+         * @private
+         */
+        refreshWorkspaceSelector: function() {
+            if (!this.exportModal || !this.exportModal.wsSelector) {
+                return;
+            }
+            else if (!this.options.auth || !this.options.userId) {
+                this.exportModal.wsSelector.empty().append("<option>Not logged in!</option>");
+                return;
+            }
+            else {
+                this.wsClient.list_workspace_info({"perm" : "w"}, 
+                    $.proxy(function(wsList) {
+                        wsList = wsList.sort(function(a, b) {
+                            return (a[1] < b[1]) ? -1 : ( a[1] > b[1] ? 1 : 0 );
+                        });
+                        this.exportModal.wsSelector.empty();
+                        for (var i=0; i<wsList.length; i++) {
+                            this.exportModal.wsSelector.append($("<option>")
+                                                               .attr("value", wsList[i][0])
+                                                               .append(wsList[i][1]));
+                        }
+                    }, this),
+
+                    $.proxy(function(error) {
+                        this.dbg("ERROR WHILE FETCHING WRITEABLE WORKSPACE LIST!");
+                        this.dbg(error);
+                        this.exportModal.wsSelector.empty()
+                                                   .append("<option value='" + this.options.userId + ":home'>" + this.options.userId + ":home</option>");
+                    }, this));
+            }
         },
 
         /**
@@ -171,10 +268,11 @@
 
             this.$dataManager.hide();
 
-            this.$controlBox = $("<div class='container'/>")
+            this.$controlBox = $('<div>'); // do not show control box anymore
+                        /*$("<div class='container'/>")
                                .addClass("kblpc-control-box")
                                .append($("<div class='row'>").append($dropdown))
-                               .append(this.$dataManager);
+                               .append(this.$dataManager);*/
         },
 
         /**
@@ -433,7 +531,7 @@
             /**
              * This internal function does the work of invoking all the exporters.
              */
-            var exportWs = this.options.userId + "_home";
+            var exportWsId = this.ex
             var self = this;
             var doExport = function() {
                 self.exportModal.body.append(self.exportModal.loadingDiv);
@@ -446,7 +544,6 @@
 
                 $.when.apply($, jobsList).done(function() {
                     self.exportModal.modal.modal('hide');
-                    self.dbg("Done exporting genomes!");
                 });
             };
 
@@ -455,15 +552,25 @@
              * If the user says yes, modify it to show a progress bar or something.
              */
 
-            if (Object.keys(exportData).length === 0) {
-                this.exportModal.body.html("No data selected for export!");
+            if (this.options.auth === null || this.options.userId === null) {
+                this.exportModal.errorBody.html("You must be logged in to export data!");
                 this.exportModal.okButton.addClass("hide");
+                this.exportModal.errorBody.show();
+                this.exportModal.wsDataBody.hide();
+            }
+            else if (Object.keys(exportData).length === 0) {
+                this.exportModal.errorBody.html("No data selected for export!");
+                this.exportModal.okButton.addClass("hide");
+                this.exportModal.errorBody.show();
+                this.exportModal.wsDataBody.hide();
             }
             else {
-                var $bodyHtml = "Export selected data to workspace '<b>" + exportWs + "</b>'?";
-                this.exportModal.body.html($bodyHtml);
+                // var $bodyHtml = "Export selected data to workspace '<b>" + exportWs + "</b>'?";
+                // this.exportModal.body.html($bodyHtml);
                 this.exportModal.okButton.removeClass("hide");
                 this.exportModal.okButton.click(function(event) { doExport(); });
+                this.exportModal.errorBody.hide();
+                this.exportModal.wsDataBody.show();
             }
             this.exportModal.modal.modal({'backdrop': 'static', 'keyboard': false});
 
@@ -523,7 +630,7 @@
 
             return [];
         },
-	
+    
         _exportMemeRunResult: function(data, workspace) {
             this.dbg("Exporting MEME run result");
             this.dbg(data);
@@ -531,8 +638,43 @@
             return [];
         },
 
+        _exportCmonkeyRunResult: function(data, workspace) {
+            this.dbg("Exporting cMonkey run result");
+            this.dbg(data);
+
+            return [];
+        },
+
+        _exportInferelatorRunResult: function(data, workspace) {
+            this.dbg("Exporting Inferelator run result");
+            this.dbg(data);
+
+            return [];
+        },
+
+        _exportRegulome: function(data, workspace) {
+            this.dbg("Exporting Regulome");
+            this.dbg(data);
+
+            return [];
+        },
+
+        _exportMAKResult: function(data, workspace) {
+            this.dbg("Exporting MAK result");
+            this.dbg(data);
+
+            return [];
+        },
+
         _exportBambiRunResult: function(data, workspace) {
             this.dbg("Exporting BAMBI run result");
+            this.dbg(data);
+
+            return [];
+        },
+
+        _exportTreeRunResult: function(data, workspace) {
+            this.dbg("Exporting Tree run result");
             this.dbg(data);
 
             return [];
@@ -561,13 +703,36 @@
 
         showInitialCards: function() {
             // if no template given, just load a blank layout.
+        	console.log("kbaseCardLayoutManager.showInitialCards: " + this.options.template)
             if (!this.options.template)
                 return;
 
             if (this.options.template.toLowerCase() === "genome")
                 this.showGenomeCards();
+            else if (this.options.template.toLowerCase() === "gptype")
+                this.showGWASPopCards();
+            else if (this.options.template.toLowerCase() === "gttype")
+                this.showGWASTraitCards();
+            else if (this.options.template.toLowerCase() === "gvtype")
+                this.showGWASVarCards();
+            else if (this.options.template.toLowerCase() === "gpktype")
+                this.showGWASPopKinshipCards();
+            else if (this.options.template.toLowerCase() === "ggltype")
+                this.showGWASGeneListCards();
+            else if (this.options.template.toLowerCase() === "gtvtype")
+                this.showGWASTopVariationsCards();
             else if (this.options.template.toLowerCase() === "meme")
                 this.showMemeCards();
+            else if (this.options.template.toLowerCase() === "cmonkey")
+                this.showCmonkeyCards();
+            else if (this.options.template.toLowerCase() === "inferelator")
+                this.showInferelatorCards();
+            else if (this.options.template.toLowerCase() === "regprecise")
+                this.showRegpreciseCards();
+            else if (this.options.template.toLowerCase() === "mak")
+                this.showMAKCards();
+			else if (this.options.template.toLowerCase() === "floatdatatable")
+                this.showFloatMAKCards();		
             else if (this.options.template.toLowerCase() === "bambi")
                 this.showBambiCards();
             else if (this.options.template.toLowerCase() === "gene")
@@ -576,6 +741,30 @@
                 this.showModelCards();
             else if (this.options.template.toLowerCase() === "spec")
                 this.showSpecCards();
+            else if (this.options.template.toLowerCase() === "wsref")
+                this.showRefCards();
+            else if (this.options.template.toLowerCase() === "wsrefusers")
+                this.showRefUsersCards();
+            else if (this.options.template.toLowerCase() === "wsobjgraphview")
+                this.showWsObjGraphCards();
+            else if (this.options.template.toLowerCase() === "wsobjgraphcenteredview")
+                this.showWsObjGraphCenteredCards();
+            else if (this.options.template.toLowerCase() === "ppid")
+                this.showPPICards();
+            else if (this.options.template.toLowerCase() === "tree")
+                this.showTreeCards();
+            else if (this.options.template.toLowerCase() === "taxonomy")
+                this.showTaxonomyCards();
+            else if (this.options.template.toLowerCase() === "pangenome")
+                this.showPangenomeCards();
+            else if (this.options.template.toLowerCase() === "msa")
+                this.showMSACards();
+            else if (this.options.template.toLowerCase() === "kidledt")
+                this.showKidlEdtCards();
+            else if (this.options.template.toLowerCase() === "json")
+                this.showJsonCards();
+            else if (this.options.template.toLowerCase() === "contigset")
+                this.showContigSetCards();
             else {
                 // throw an error for an unknown template. modal dialog, maybe?
             }
@@ -586,10 +775,14 @@
          * Shows a genome overview and a description card.
          */
         showGenomeCards: function() {
-            this.addNewCard("KBaseGenomeOverview", 
-                { 
+            if (this.options.data.workspaceID === "CDS")
+                this.options.data.workspaceID = null;
+                this.addNewCard("KBaseGenomeOverview", 
+                {
                     genomeID: this.options.data.genomeID,
                     loadingImage: this.options.loadingImage,
+                    workspaceID: this.options.data.workspaceID,
+                    kbCache: this.options.data.kbCache,
                     isInCard: true
                 },
                 {
@@ -603,6 +796,8 @@
                 {
                     genomeID: this.options.data.genomeID,
                     loadingImage: this.options.loadingImage,
+                    workspaceID: this.options.data.workspaceID,
+                    kbCache: this.options.data.kbCache,
                 },
                 {
                     my: "left top",
@@ -610,16 +805,137 @@
                     of: "#app"
                 }
             );
+
+	
+	// only show meta data if this is a WS object
+            if (this.options.data.workspaceID) {		
+                this.addNewCard("KBaseObjectMeta",
+                {
+                    wsNameOrId: this.options.data.workspaceID,
+                    objNameOrId: this.options.data.genomeID,
+                     objVer: null,
+                      kbCache: this.options.data.kbCache,
+                      loadingImage: this.options.loadingImage,                      
+                },
+                {
+                    my: "left top",
+                    at: "left+500 bottom",
+                    of: "#app"
+                }
+            );
+	       }
+
+	//shows taxonomic lineage for this genome
+                this.addNewCard("KBaseGenomeLineage",
+                {
+                    workspaceID: this.options.data.workspaceID,
+                    genomeID: this.options.data.genomeID,
+                     objVer: null,
+                      kbCache: this.options.data.kbCache,
+                      loadingImage: this.options.loadingImage,
+                },
+                {
+                    my: "left top",
+                    at: "left+500 bottom",
+                    of: "#app"
+                }
+            );
+                
+            // only add the reference list if this is a WS object
+            if (this.options.data.workspaceID) {
+                this.addNewCard("KBaseWSReferenceList",
+                    {
+                        wsNameOrId: this.options.data.workspaceID,
+                        objNameOrId: this.options.data.genomeID,
+                        objVer: null,
+                        kbCache: this.options.data.kbCache
+                    },
+                    {
+                        my: "left top",
+                        at: "left bottom+570",
+                        of: "#app"
+                    }
+                );
+            }
+            
+            // only add the reference list if this is a WS object
+            if (this.options.data.workspaceID) {
+                this.addNewCard("KBaseWSObjRefUsers",
+                    {
+                        wsNameOrId: this.options.data.workspaceID,
+                        objNameOrId: this.options.data.genomeID,
+                        objVer: null,
+                        kbCache: this.options.data.kbCache
+                    },
+                    {
+                        my: "left top",
+                        at: "left+860 bottom",
+                        of: "#app"
+                    }
+                );
+            }
+
+            // only add the reference list if this is a WS object
+            if (this.options.data.workspaceID) {
+                this.addNewCard("KBaseNarrativesUsingData",
+                    {
+                        wsNameOrId: this.options.data.workspaceID,
+                        objNameOrId: this.options.data.genomeID,
+                        objVer: null,
+                        kbCache: this.options.data.kbCache
+                    },
+                    {
+                        my: "left top",
+                        at: "left bottom+870",
+                        of: "#app"
+                    }
+                );
+            }
+
+            // SEED Funcitons card
+            if (this.options.data.workspaceID) {
+                this.addNewCard("KBaseSEEDFunctions",
+                    {
+                        wsNameOrId: this.options.data.workspaceID,
+                        objNameOrId: this.options.data.genomeID,
+                        objVer: null,
+                        kbCache: this.options.data.kbCache
+                    },
+                    {
+                        my: "left top",
+                        at: "left bottom+870",
+                        of: "#app"
+                    }
+                );
+            }
+
+            
+            
             return this;
         },
+
+
 
         /**
          * Template for showing gene cards.
          */
         showGeneCards: function() {
-            this.addNewCard("kbaseGeneInfo",
+            // this.addNewCard("KBaseGeneInfo",
+            //     {
+            //         featureID: this.options.data.featureID,
+            //     },
+            //     {
+            //         my: "left top",
+            //         at: "left bottom",
+            //         of: "#app"
+            //     }
+            // );
+            this.addNewCard("KBaseGeneInstanceInfo",
                 {
-                    featureID: this.options.data.geneID,
+                    featureID: this.options.data.featureID,
+                    genomeID: this.options.data.genomeID,
+                    workspaceID: this.options.data.workspaceID,
+                    kbCache: this.options.data.kbCache
                 },
                 {
                     my: "left top",
@@ -627,16 +943,165 @@
                     of: "#app"
                 }
             );
-            this.addNewCard("KBaseGeneInstanceInfo",
+
+	/*	
+            this.addNewCard("KBaseGeneBiochemistry",
                 {
-                    featureID: this.options.data.geneID,
+                    featureID: this.options.data.featureID,
+                    genomeID: this.options.data.genomeID,
+                    workspaceID: this.options.data.workspaceID,
+                    kbCache: this.options.data.kbCache
                 },
                 {
                     my: "left top",
-                    at: "left+330 bottom",
+                    at: "left+375 bottom",
                     of: "#app"
                 }
             );
+
+            this.addNewCard("KBaseGeneSequence",
+                {
+                    featureID: this.options.data.featureID,
+                    genomeID: this.options.data.genomeID,
+                    workspaceID: this.options.data.workspaceID,
+                    kbCache: this.options.data.kbCache
+                },
+                {
+                    my: "left top",
+                    at: "left bottom+450",
+                    of: "#app"
+                }
+            );
+
+            this.addNewCard("KBaseContigBrowser",
+                {
+                    featureId: this.options.data.featureID,
+                    genomeId: this.options.data.genomeID,
+                    workspaceId: this.options.data.workspaceID,
+                    kbCache: this.options.data.kbCache
+                },
+                {
+                    my: "left top",
+                    at: "left bottom+450",
+                    of: "#app"
+                }
+            );
+
+        */
+  
+            this.addNewCard("KBaseGeneExprLinePlot",
+                    {
+                        featureID: this.options.data.featureID,
+                        row: this.options.data.row,//null,//[1],
+                        workspaceId: this.options.data.workspaceID,
+                        kbCache: this.options.data.kbCache
+                    },
+                    {
+                            my: "left top",
+                            at: "left bottom+200",
+                            of: "#app"
+                    }
+            );
+            
+            /*
+            this.addNewCard("KBaseGeneLitWidget",
+                    {
+                    featureID: this.options.data.featureID,
+                    kbCache: this.options.data.kbCache
+                    },
+                    {
+                            my: "left top",
+                            at: "left bottom+200",
+                            of: "#app"
+                    }
+            );
+            */
+        },
+
+        /**
+         * Template for showing gwas model cards.
+         */
+        showGWASPopCards: function() {
+            var populationMapCard = this.addNewCard("KBaseGWASPopMaps",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "left top",
+                  at: "left-30 top",
+                  of: "#app"});
+            var populationTableCard = this.addNewCard("KBaseGWASPopTable",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "right top",
+                  at: "right-20 top",
+                  of: "#app"});
+            var populationCard = this.addNewCard("KBaseGWASPop",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "left+2 top+45",
+                  at: "center middle",
+                  of: populationMapCard});
+        },
+
+        /**
+         * Template to show GWAS traits data
+         */
+        showGWASTraitCards: function() {
+            var traitMapCard = this.addNewCard("KBaseGWASTraitMaps",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "left top-10",
+                  at: "left-30 bottom",
+                  of: "#app"});
+            var traiTableCard = this.addNewCard("KBaseGWASTraitTable",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "left top-10",
+                  at: "center middle",
+                  of: "#app"});
+        },
+
+        /**
+         * Template to show GWAS variation data
+         */
+        showGWASVarCards: function() {
+            this.addNewCard("KBaseGWASVarTable",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "left top",
+                  at: "left bottom",
+                  of: "#app"});
+        },
+
+        /**
+         * Template to show GWAS kinship data
+         */
+        showGWASPopKinshipCards: function() {
+            this.addNewCard("KBaseGWASPopKinshipTable",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "left top",
+                  at: "left bottom",
+                  of: "#app"});
+        },
+
+        /**
+         * Template for showing GWAS Gene List
+         */
+         showGWASGeneListCards: function() {
+            this.addNewCard("KBaseGWASGeneListTable",
+                { id: this.options.data.id, ws: this.options.data.ws, draggable: false},
+                { my: "left top",
+                  at: "left-30 top-10",
+                  of: "#app"});
+         },
+
+        /**
+         * Template for showing GWAS Top Variations
+         */
+         showGWASTopVariationsCards: function() {
+            this.addNewCard("KBaseGWASTopVariations",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "left top-10",
+                  at: "left top",
+                  of: "#app"});
+            this.addNewCard("KBaseGWASTopVariationsTable",
+                { id: this.options.data.id, ws: this.options.data.ws},
+                { my: "right top",
+                  at: "right-20 top-10",
+                  of: "#app"});
         },
 
         /**
@@ -661,14 +1126,16 @@
          */
         
         showMemeCards: function() {
-        	var pattMeme = /MemeRunResult/i;
-        	var pattTomtom = /TomtomRunResult/i;
-        	var pattMast = /MastRunResult/i;
-        	if (this.options.data.meme_run_result_id.match(pattMeme)){
-            	this.addNewCard("KBaseMemeRunResultCard",
+            var pattMeme = /MemeRunResult/i;
+            var pattTomtom = /TomtomRunResult/i;
+            var pattMast = /MastRunResult/i;
+            if (this.options.data.id.match(pattMeme)){
+                this.addNewCard("KBaseMemeRunResultCard",
                         {
-                            meme_run_result_id: this.options.data.meme_run_result_id,
-                            workspace_id: this.options.data.workspace_id,
+                            id: this.options.data.id,
+                            ws: this.options.data.ws,
+                            auth: this.options.auth,
+                            userId: this.options.userId,
                             loadingImage: this.options.loadingImage,
                             isInCard: true
                         },
@@ -678,13 +1145,15 @@
                             of: "#app"
                         }
                     );
-        	    return this;
-        	}
-        	else if (this.options.data.meme_run_result_id.match(pattTomtom)){
-            	this.addNewCard("KBaseTomtomRunResultCard",
+                return this;
+            }
+            else if (this.options.data.id.match(pattTomtom)){
+                this.addNewCard("KBaseTomtomRunResultCard",
                         {
-                            tomtom_run_result_id: this.options.data.meme_run_result_id,
-                            workspace_id: this.options.data.workspace_id,
+                            id: this.options.data.id,
+                            ws: this.options.data.ws,
+                            auth: this.options.auth,
+                            userId: this.options.userId,
                             loadingImage: this.options.loadingImage,
                             isInCard: true
                         },
@@ -694,13 +1163,15 @@
                             of: "#app"
                         }
                     );
-        	    return this;
-        	}
-        	else if (this.options.data.meme_run_result_id.match(pattMast)){
-            	this.addNewCard("KBaseMastRunResultCard",
+                return this;
+            }
+            else if (this.options.data.id.match(pattMast)){
+                this.addNewCard("KBaseMastRunResultCard",
                         {
-                            mast_run_result_id: this.options.data.meme_run_result_id,
-                            workspace_id: this.options.data.workspace_id,
+                            id: this.options.data.id,
+                            ws: this.options.data.ws,
+                            auth: this.options.auth,
+                            userId: this.options.userId,
                             loadingImage: this.options.loadingImage,
                             isInCard: true
                         },
@@ -710,17 +1181,158 @@
                             of: "#app"
                         }
                     );
-        	    return this;
-        	} else {
-        		return this;
-        	};
+                return this;
+            } else {
+                return this;
+            };
         },
         
+        showCmonkeyCards: function() {
+                this.addNewCard("KBaseCmonkeyRunResultCard",
+                        {
+                            id: this.options.data.id,
+                            ws: this.options.data.ws,
+                            auth: this.options.auth,
+                            userId: this.options.userId,
+                            loadingImage: this.options.loadingImage,
+                            isInCard: true
+                        },
+                        {
+                            my: "left top",
+                            at: "left bottom",
+                            of: "#app"
+                        }
+                    );
+                return this;
+        },
+
+        showInferelatorCards: function() {
+                this.addNewCard("KBaseInferelatorRunResultCard",
+                        {
+                            id: this.options.data.id,
+                            ws: this.options.data.ws,
+                            auth: this.options.auth,
+                            userId: this.options.userId,
+                            loadingImage: this.options.loadingImage,
+                            isInCard: true
+                        },
+                        {
+                            my: "left top",
+                            at: "left bottom",
+                            of: "#app"
+                        }
+                    );
+                return this;
+        },
+
+        showRegpreciseCards: function() {
+                this.addNewCard("KBaseRegulomeCard",
+                        {
+                            id: this.options.data.id,
+                            ws: this.options.data.ws,
+                            auth: this.options.auth,
+                            userId: this.options.userId,
+                            loadingImage: this.options.loadingImage,
+                            isInCard: true
+                        },
+                        {
+                            my: "left top",
+                            at: "left bottom",
+                            of: "#app"
+                        }
+                    );
+                return this;
+        },
+
+        showMAKCards: function() {
+                this.addNewCard("KBaseMAKResultCard",
+                    {
+                        id: this.options.data.id,
+                        workspace: this.options.data.workspace,
+                        auth: this.options.auth,
+                        userId: this.options.userId,
+						kbCache: this.options.data.kbCache,
+                        loadingImage: this.options.loadingImage,
+                        isInCard: true
+                    },
+                    {
+                        my: "left top",
+                        at: "left-100 top",
+                        of: "#app"
+                    }
+                 );
+				 
+				this.addNewCard("KBaseMAKTilingCard",
+					{
+						id: this.options.data.id,
+                        workspace: this.options.data.workspace,
+                        auth: this.options.auth,
+                        userId: this.options.userId,
+						kbCache: this.options.data.kbCache,
+                        loadingImage: this.options.loadingImage,
+                        isInCard: true
+					},
+					{
+						my: "center top",
+                        at: "center-150 top",
+                        of: "#app"
+					}
+				);
+                return this;
+        },
+		
+		showFloatMAKCards: function() {		
+			self = this;
+			this.workspaceClient = new Workspace(this.newWorkspaceServiceUrl, { 'token' : this.options.data.auth, 'user_id' : this.options.data.userId});
+			this.workspaceClient.get_objects([{workspace: this.options.data.workspace, name: this.options.data.id}],
+				function(data) {
+					self.addNewCard("KBaseHeatMapCard",
+						{
+							id: self.options.data.id,
+							bicluster: data[0].data,							
+							workspace: self.options.data.workspace,
+							auth: self.options.auth,
+							userId: self.options.userId,
+							loadingImage: self.options.loadingImage,
+							isInCard: true
+						},
+						{
+							my: "left top",
+							at: "left top",
+							of: "#app"
+						}
+					);
+				}
+			)			
+			return this;
+        },
+
+		showPPICards: function() {
+			this.addNewCard("KBasePPICard",
+					{
+					id: this.options.data.id,
+					ws: this.options.data.ws,
+					auth: this.options.auth,
+					userId: this.options.userId,
+					loadingImage: this.options.loadingImage,
+					isInCard: true
+					},
+					{
+					my: "left top",
+					at: "left bottom",
+					of: "#app"
+					}
+				   );
+			return this;
+		},
+
         showBambiCards: function() {
-            	this.addNewCard("KBaseBambiRunResultCard",
+                this.addNewCard("KBaseBambiRunResultCard",
                         {
                             bambi_run_result_id: this.options.data.bambi_run_result_id,
                             workspace_id: this.options.data.workspace_id,
+                            auth: this.options.auth,
+                            userId: this.options.userId,
                             loadingImage: this.options.loadingImage,
                             isInCard: true
                         },
@@ -730,26 +1342,27 @@
                             of: "#app"
                         }
                     );
-        	    return this;
+                return this;
         },
 
         /**
          * Template for showing spec-document elements cards.
          */
         showSpecCards: function() {
-        	var cardName = 'KBaseSpecUnknownCard';
-        	if (this.options.data.kind === "storage") {
-        		cardName = 'KBaseSpecStorageCard';
-        	} else if (this.options.data.kind === "module") {
-        		cardName = 'KBaseSpecModuleCard';
-        	} else if (this.options.data.kind === "type") {
-        		cardName = 'KBaseSpecTypeCard';
-        	} else if (this.options.data.kind === "function") {
-        		cardName = 'KBaseSpecFunctionCard';
-        	}        		
+            var cardName = 'KBaseSpecUnknownCard';
+            if (this.options.data.kind === "storage") {
+                cardName = 'KBaseSpecStorageCard';
+            } else if (this.options.data.kind === "module") {
+                cardName = 'KBaseSpecModuleCard';
+            } else if (this.options.data.kind === "type") {
+                cardName = 'KBaseSpecTypeCard';
+            } else if (this.options.data.kind === "function") {
+                cardName = 'KBaseSpecFunctionCard';
+            }               
             this.addNewCard(cardName,
                         {
-                            id: this.options.data.id
+                            id: this.options.data.id,
+                            token: this.options.auth
                         },
                         {
                             my: "left top",
@@ -757,7 +1370,184 @@
                             of: "#app"
                         }
                     );
-        	return this;
+            return this;
+        },
+        showRefCards: function() {
+            this.addNewCard("KBaseWSReferenceList",
+                        {
+                            wsNameOrId: this.options.data.ws,
+                            objNameOrId: this.options.data.id,
+                            objVer: this.options.data.version,
+                            kbCache: this.options.data.kbCache
+                        },
+                        {
+                            my: "left top",
+                            at: "left bottom",
+                            of: "#app"
+                        }
+                    );
+            return this;
+        },
+        showRefUsersCards: function() {
+            this.addNewCard("KBaseWSObjRefUsers",
+                        {
+                            wsNameOrId: this.options.data.ws,
+                            objNameOrId: this.options.data.id,
+                            objVer: this.options.data.version,
+                            kbCache: this.options.data.kbCache
+                        },
+                        {
+                            my: "left top",
+                            at: "left bottom",
+                            of: "#app"
+                        }
+                    );
+            return this;
+        },
+        
+        
+        showWsObjGraphCards: function() {
+            this.addNewCard("KBaseWSObjGraphView",
+                        {
+                            wsNameOrId: this.options.data.ws,
+                            kbCache: this.options.data.kbCache
+                        },
+                        {
+                            my: "left top",
+                            at: "left bottom",
+                            of: "#app"
+                        }
+                    );
+            return this;
+        },
+        showWsObjGraphCenteredCards: function() {
+            this.addNewCard("KBaseWSObjGraphCenteredView",
+                        {
+                            wsNameOrId: this.options.data.ws,
+                            objNameOrId: this.options.data.id,
+                            kbCache: this.options.data.kbCache
+                        },
+                        {
+                            my: "left top",
+                            at: "left bottom",
+                            of: "#app"
+                        }
+                    );
+            return this;
+        },
+        
+        showTreeCards: function() {
+            this.addNewCard("kbaseTree",
+                    {
+            			treeID: this.options.data.id,
+            			workspaceID: this.options.data.ws,
+                        token: this.options.auth,
+                        isInCard: true
+                    },
+                    {
+                        my: "left top",
+                        at: "left bottom",
+                        of: "#app"
+                    }
+                );
+            return this;
+        },
+
+        
+        showTaxonomyCards: function() {
+            
+            
+            this.addNewCard("KBaseTaxonOverview",
+                    {
+                        taxon: this.options.data.taxonname,
+                        wsNameOrID: this.options.data.ws,
+                        kbCache: this.options.data.kbCache,
+                        loadingImage: this.options.loadingImage,
+                    },
+                    {
+                        my: "left top",
+                        at: "left bottom",
+                        of: "#app"
+                    }
+                );
+            if (this.options.data.ws) {
+                // add other taxa specific cards here
+            }
+            return this;
+        },
+
+        showPangenomeCards: function() {
+            this.addNewCard("kbasePanGenome",
+                    {
+            			name: this.options.data.id,
+            			ws: this.options.data.ws,
+                        token: this.options.auth,
+                        isInCard: true
+                    },
+                    {
+                        my: "left top",
+                        at: "left bottom",
+                        of: "#app"
+                    }
+                );
+            return this;
+        },
+
+        showMSACards: function() {
+            this.addNewCard("kbaseMSA",
+                    {
+            			msaID: this.options.data.id,
+            			workspaceID: this.options.data.ws,
+                        token: this.options.auth,
+                        isInCard: true
+                    },
+                    {
+                        my: "left top",
+                        at: "left bottom",
+                        of: "#app"
+                    }
+                );
+            return this;
+        },
+
+        showKidlEdtCards: function() {
+            this.addNewCard("kbaseKidlWebEditor",
+                    {	type: this.options.data.type,
+            			mod: this.options.data.mod,
+                        isInCard: true
+                    },
+                    {   my: "left top",
+                        at: "left bottom",
+                        of: "#app"
+                    }
+                );
+            return this;
+        },
+
+        showJsonCards: function() {
+            this.addNewCard("kbaseJsonView",
+                    {	ws: this.options.data.ws,
+            			id: this.options.data.id
+                    },
+                    {   my: "left top",
+                        at: "left bottom",
+                        of: "#app"
+                    }
+                );
+            return this;
+        },
+
+        showContigSetCards: function() {
+            this.addNewCard("kbaseContigSetView",
+                    {	ws: this.options.data.ws,
+            			id: this.options.data.id
+                    },
+                    {   my: "left top",
+                        at: "left bottom",
+                        of: "#app"
+                    }
+                );
+            return this;
         },
 
         /**
@@ -771,10 +1561,15 @@
             this.registeredEvents = ["featureClick", 
                                      "showContig",
                                      "showGenome", 
+                                     "showFeature",
                                      "showGenomeDescription",
+                                     "showGWASPopDetails",
+                                     "showGWASPopCards",
                                      "showDomains", 
                                      "showOperons", 
+                                     "showSequence", 
                                      "showBiochemistry", 
+                                     "showStructureMatches",
                                      "showSpecElement", 
                                      "showMemeMotif", 
                                      "showMemeRunParameters", 
@@ -782,10 +1577,106 @@
                                      "showTomtomHits", 
                                      "showTomtomRunParameters", 
                                      "showMastHits",
+                                     "showMastRunParameters", 
+                                     "showCmonkeyCluster", 
+                                     "showCmonkeyMotif",
+                                     "showInferelatorHits",
+                                     "showNetwork",
+                                     "showRegulon",
+                                     "showMAKCluster", 
                                      "showBambiMotif",
                                      "showBambiRunParameters", 
-                                     "showBambiRawOutput"];
+                                     "showBambiRawOutput",
+									 "showLitWidget",
+									 "showTree",
+									 "showHeatMap",
+									 "showLineChart",									 
+									 "showBarChart",
+									 "showKidlEditor"
+									 ];
+									 
+			/**
+             * Event: showBarChart
+             * ------------------
+             * Adds new kbaseMAKBarChart card.
+             */	
+			$(document).on("showBarChart", function(event, data) {
+				self.addNewCard("KBaseBarChartCard",
+					{
+						terms: data.terms,
+						id: data.id,
+						workspace: data.workspace
+					},
+					{
+						my: "right top",
+						at: "right+100 top",
+						of: "#app"
+				});
+			});
+			
+			/**
+             * Event: showLineChart
+             * ------------------
+             * Adds new kbaseLineChart card.
+             */
+			$(document).on("showLineChart", function(event, data) {
+				self.addNewCard("KBaseLineChartCard",
+					{
+						row: data.row,		
+						id: data.id,
+						workspace: data.workspace
+					},
+					{
+						my: "right bottom",
+						at: "left bottom",
+						of: "#app"
+				});
 
+			});
+			
+			/**
+             * Event: showHeatMap
+             * ------------------
+             * Adds new kbaseHeatmap card.
+             */
+			$(document).on("showHeatMap", function(event, data) {
+			self.addNewCard("KBaseHeatMapCard",
+				{
+					bicluster: data.bicluster,
+					id: data.id,
+					workspace: data.workspace,
+					tiles: data.tiles,
+					mak: data.mak
+				},
+				{
+                    my: "left top",
+                    at: "center",
+                    of: data.event
+				});
+			});
+
+			/**
+             * Event: showLitWidget
+             * ------------------
+             * Adds new kbaseLitWidget card.
+             */
+			$(document).on("showLitWidget", function(event, data) {
+				self.addNewCard("KBaseLitWidget",
+					{
+						literature: data.literature,
+						genomeID: data.genomeID,
+						workspaceID: data.workspaceID,
+						kbCache: data.kbCache,
+						loadingImage: self.options.loadingImage                      
+					},
+					{
+						my: "right top",
+						at: "right+800 bottom",
+						of: data.event
+				});
+
+			});
+			
             /**
              * Event: showDomains
              * ------------------
@@ -822,6 +1713,26 @@
             });
 
             /**
+             * Event: showSequence
+             * -----------------------
+             * Adds new KBaseGeneSequence card, based on a feature ID.
+             */            
+            $(document).on("showSequence", function(event, data) {
+                self.addNewCard("KBaseGeneSequence",
+                {
+                    featureID: data.featureID,
+                    genomeID: data.genomeID,
+                    workspaceID: data.workspaceID,
+                    kbCache: data.kbCache,
+                },
+                {
+                    my: "left top",
+                    at: "center",
+                    of: data.event
+                });
+            });
+
+            /**
              * Event: showBiochemistry
              * -----------------------
              * Adds new KBaseGeneBiochemistry card, based on a feature ID.
@@ -829,7 +1740,30 @@
             $(document).on("showBiochemistry", function(event, data) {
                 self.addNewCard("KBaseGeneBiochemistry",
                 {
-                    featureID: data.featureID
+                    featureID: data.featureID,
+                    genomeID: data.genomeID,
+                    workspaceID: data.workspaceID,
+                    kbCache: data.kbCache,
+                },
+                {
+                    my: "left top",
+                    at: "center",
+                    of: data.event
+                });
+            });
+
+            /**
+             * Event: showStructureMatches
+             * -----------------------
+             * Adds new KBaseGeneStructureMatches card, based on a feature ID.
+             */            
+            $(document).on("showStructureMatches", function(event, data) {
+                self.addNewCard("KBaseGeneStructureMatches",
+                {
+                    featureID: data.featureID,
+                    genomeID: data.genomeID,
+                    workspaceID: data.workspaceID,
+                    kbCache: data.kbCache,
                 },
                 {
                     my: "left top",
@@ -844,20 +1778,23 @@
              * Adds cards based on clicking on a feature.
              */
             $(document).on("featureClick", function(event, data) {
-                self.addNewCard("KBaseGeneInfo", 
-                    { 
-                        featureID: data.feature.feature_id, 
-                    },
-                    {
-                        my: "left top",
-                        at: "center",
-                        of: data.featureElement
-                    }
-                );
+                // self.addNewCard("KBaseGeneInfo", 
+                //     { 
+                //         featureID: data.feature.feature_id, 
+                //     },
+                //     {
+                //         my: "left top",
+                //         at: "center",
+                //         of: data.featureElement
+                //     }
+                // );
 
                 self.addNewCard("KBaseGeneInstanceInfo",
                     {
                         featureID: data.feature.feature_id,
+                        workspaceID: data.workspaceId,
+                        genomeID: data.genomeId,
+                        kbCache: data.kbCache,
                     },
                     {
                         my: "left top",
@@ -877,9 +1814,33 @@
                 self.addNewCard("KBaseContigBrowser",
                     {
                         contig: data.contig,
+                        genomeId: data.genomeId,
+                        workspaceId: data.workspaceId,
                         showButtons: true,
                         loadingImage: self.options.loadingImage,
-                        centerFeature: data.centerFeature
+                        centerFeature: data.centerFeature,
+                        kbCache: data.kbCache,
+                    },
+                    {
+                        my: "left top",
+                        at: "center",
+                        of: data.event
+                    }
+                );
+            });
+
+            /**
+             * Event: showFeature
+             * -----------------
+             * Adds new KBaseGeneInfo card for a given Feature ID
+             */
+            $(document).on("showFeature", function(event, data) {
+                self.addNewCard("KBaseGeneInfo",
+                    {
+                        featureID: data.featureID,
+                        workspaceID: data.workspaceID,
+                        genomeID: data.genomeID,
+                        kbCache: data.kbCache,
                     },
                     {
                         my: "left top",
@@ -899,6 +1860,7 @@
                     {
                         genomeID: data.genomeID,
                         workspaceID: data.workspaceID,
+                        kbCache: data.kbCache,
                         isInCard: true
                     },
                     {
@@ -913,6 +1875,8 @@
                 self.addNewCard("KBaseWikiDescription",
                     {
                         genomeID: data.genomeID,
+                        workspaceID: data.workspaceID,
+                        kbCache: data.kbCache,
                         loadingImage: self.options.loadingImage,
                     },
                     {
@@ -922,6 +1886,7 @@
                     }
                 );
             });
+
 
             /**
              * Event: showMemeMotif
@@ -1046,6 +2011,135 @@
             });
 
             /**
+             * Event: showMastRunParameters
+             * -------------------
+             * Adds new TOMTOM Hits card.
+             */
+            $(document).on("showMastRunParameters", function(event, data) {
+                self.addNewCard("KBaseMastRunParametersCard",
+                    {
+                        mastresult: data.mastresult,
+                        showButtons: true,
+                        centerFeature: data.centerFeature
+                    },
+                    {
+                        my: "left top",
+                        at: "left+420 bottom",
+                        of: "#app"
+                    }
+                );
+            });
+
+            /**
+             * Event: showCmonkeyCluster
+             * -------------------
+             * Adds card with cMonkey bi-cluster.
+             */
+
+            $(document).on("showCmonkeyCluster", function(event, data) {
+                self.addNewCard("KBaseCmonkeyClusterCard",
+                    {
+                        cluster: data.cluster,
+                        showButtons: true,
+                        centerFeature: data.centerFeature
+                    },
+                    {
+                        my: "left top",
+                        at: "left+600 bottom",
+                        of: "#app"
+                    }
+                );
+            });
+
+            /**
+             * Event: showCmonkeyMotif
+             * -------------------
+             * Adds new cMonkey Motif card.
+             */
+            $(document).on("showCmonkeyMotif", function(event, data) {
+                self.addNewCard("KBaseCmonkeyMotifCard",
+                    {
+                        motif: data.motif,
+                        showButtons: true,
+                        centerFeature: data.centerFeature
+                    },
+                    {
+                        my: "center top",
+                        at: "center bottom",
+                        of: "#app"
+                    }
+                );
+            });
+
+            /**
+             * Event: showInferelatorHits
+             * -------------------
+             * Adds card with Inferelator hit list.
+             */
+
+            $(document).on("showInferelatorHits", function(event, data) {
+                self.addNewCard("KBaseInferelatorHitsCard",
+                    {
+                        inferelatorrunresult: data.inferelatorrunresult,
+                        showButtons: true,
+                        centerFeature: data.centerFeature
+                    },
+                    {
+                        my: "left top",
+                        at: "left+600 bottom",
+                        of: "#app"
+                    }
+                );
+            });
+
+            /**
+             * Event: showRegulon
+             * -------------------
+             * Adds card with Regulon.
+             */
+
+            $(document).on("showRegulon", function(event, data) {
+                self.addNewCard("KBaseRegulonCard",
+                    {
+                        regulon: data.regulon,
+                        showButtons: true,
+                        centerFeature: data.centerFeature
+                    },
+                    {
+                        my: "left top",
+                        at: "left+600 bottom",
+                        of: "#app"
+                    }
+                );
+            });
+
+            /**
+             * Event: showMAKBicluster
+             * -------------------
+             * Adds card with MAK bi-cluster.
+             */
+
+            $(document).on("showMAKBicluster", function(event, data) {
+				console.log("kblpc"+self.cardIndex)
+				console.log(self.cards)
+                self.addNewCard("KBaseMAKBiclusterCard",
+                    {
+                        bicluster: data.bicluster,
+						id: data.id,
+						workspace: data.workspace,
+						tiles: data.tiles,
+                        showButtons: true,
+                        centerFeature: data.centerFeature
+                    },
+                    {
+                        my: "left top",
+                        at: "left-100 bottom+2000",
+                        of: "#app"
+                    }
+                );
+            });
+
+            /**
              * Event: showBambiMotif
              * -------------------
              * Adds new BAMBI Motif card.
@@ -1113,25 +2207,105 @@
              * Adds new KBaseSpec[Storage|Module|Type|Function]Card card.
              */
             $(document).on("showSpecElement", function(event, data) {
-            	var cardName = 'KBaseSpecUnknownCard';
-            	if (data.kind === "storage") {
-            		cardName = 'KBaseSpecStorageCard';
-            	} else if (data.kind === "module") {
-            		cardName = 'KBaseSpecModuleCard';
-            	} else if (data.kind === "type") {
-            		cardName = 'KBaseSpecTypeCard';
-            	} else if (data.kind === "function") {
-            		cardName = 'KBaseSpecFunctionCard';
-            	}
+                var cardName = 'KBaseSpecUnknownCard';
+                if (data.kind === "storage") {
+                    cardName = 'KBaseSpecStorageCard';
+                } else if (data.kind === "module") {
+                    cardName = 'KBaseSpecModuleCard';
+                } else if (data.kind === "type") {
+                    cardName = 'KBaseSpecTypeCard';
+                } else if (data.kind === "function") {
+                    cardName = 'KBaseSpecFunctionCard';
+                }
                 self.addNewCard(cardName,
                 {
-                    id: data.id
+                    id: data.id,
+                    token: data.token
                 },
                 {
                     my: "left top",
                     at: "center",
                     of: data.event
                 });
+            });
+
+            /**
+             * Event: showNetwork
+             * -------------------
+             * Adds card with Cytoscape.js view of a network
+             */
+            $(document).on("showNetwork", function(event, data) {
+        		self.addNewCard("KBaseNetworkCard",
+                {
+                    network: data.network,
+                    netname: data.netname,
+		    ws: data.ws
+                },
+                {
+                    my: "left top",
+                    at: "left+600 bottom",
+                    of: "#app"
+                }
+                   );
+            });
+
+            $(document).on("showTree", function(event, data) {
+            	self.addNewCard("kbaseTree",
+            			{
+            				workspaceID: data.workspaceID,
+            				treeID: data.treeID,
+            				token: data.token
+            			},
+            			{
+            				my: "left top",
+            				at: "center",
+            				of: data.event
+            			}
+            	);
+            });
+
+            $(document).on("showPangenome", function(event, data) {
+            	self.addNewCard("kbasePanGenome",
+            			{
+            				ws: data.ws,
+            				name: data.name,
+            				token: data.token
+            			},
+            			{
+            				my: "left top",
+            				at: "center",
+            				of: data.event
+            			}
+            	);
+            });
+
+            $(document).on("showMSA", function(event, data) {
+            	self.addNewCard("kbaseMSA",
+            			{
+            				workspaceID: data.workspaceID,
+            				msaID: data.msaID,
+            				token: data.token
+            			},
+            			{
+            				my: "left top",
+            				at: "center",
+            				of: data.event
+            			}
+            	);
+            });
+
+            $(document).on("showKidlEditor", function(event, data) {
+            	self.addNewCard("kbaseKidlWebEditor",
+            			{
+            				mod: data.mod,
+            				type: data.type
+            			},
+            			{
+            				my: "left top",
+            				at: "center",
+            				of: data.event
+            			}
+            	);
             });
 
             $(document).on("helloClick", function(event, data) {
@@ -1149,7 +2323,7 @@
          */
         addNewCard: function(cardName, options, position) {
             /** position = optional. if none given, it puts the new card in the center of the page **/
-
+            
             /* NOTE - later, have it manage where the new card comes in here.
              *
              * Should be a way to use the dialog/position jqueryUI stuff.
@@ -1198,7 +2372,7 @@
                 }
             }
 
-            this.$elem.append("<div id='" + newCardId + "'/>");
+            this.$elem.append("<div id='" + newCardId + "'>").css({margin:'30px'});
 
             var newWidget = $("#" + newCardId)[cardName](options);
 
@@ -1206,16 +2380,23 @@
             // otherwise use options.
             if (newWidget.getData) {
                 var data = newWidget.getData();
+                //console.log(data);
                 var cardTitle = data.title ? data.title : "";
                 var cardSubtitle = data.id ? data.id : "";
                 var cardWidth = newWidget.options.width ? newWidget.options.width : this.defaultWidth;
                 var cardWorkspace = data.workspace ? data.workspace : this.cdmWorkspace;
+                var cardDrag = data.draggable ? true: data.draggable;
+                var cardResize = data.resizable ? true: data.resizable;
+                var cardClass = data.dialogClass ? data.dialogClass : null;
             } else {
-                console.log('here')
+                console.log(options);
                 var cardTitle = options.title ? options.title : "";
                 var cardSubtitle = options.id ? options.id : "";
                 var cardWidth = options.width ? options.width : this.defaultWidth;                
                 var cardWorkspace = options.workspace ? options.workspace : this.cdmWorkspace;                
+                var cardDrag = options.draggable ? true: options.draggable;
+                var cardResize = options.resizable ? true: options.resizable;
+                var cardClass = options.dialogClass ? options.dialogClass : null;
             }
 
             var cardOptions = {
@@ -1224,16 +2405,19 @@
                        cardTitle + 
                        "</div>" +
                        "<div class='kblpc-subtitle'>" + 
-                       cardSubtitle + 
-                       "<span class='label label-primary pull-right'>" +
-                       cardWorkspace + 
-                       "</span></div>",
+                       cardSubtitle +
+                       // we shouldn't display workspace info anymore
+                       "</div>",
                 width: cardWidth,
                 id: newCardId,
+                draggable: cardDrag,
+                resizable: cardResize,
+                dialogClass: cardClass
             };
 
-            if (newWidget.options.height)
+            if (newWidget.options.height) {
                 cardOptions.height = newWidget.options.height;
+            }
 
             var self = this;
             var newCard = newWidget.$elem.LandingPageCard(cardOptions); //$("#" + newCardId).LandingPageCard(cardOptions);
@@ -1334,6 +2518,12 @@
             this.dbg(error);
         },
 
+        closeAllCards: function() {
+            for (var cardId in this.cards) {
+                this.cards[cardId].card.LandingPageCard("close");
+            }
+        },
+
         /**
          * When the manager is destroyed, it needs to:
          * 1. Close all cards.
@@ -1343,9 +2533,7 @@
          * That third one might be more appropriate to occur outside of this widget, but here it is for now.
          */
         destroy: function() {
-            for (var cardId in this.cards) {
-                this.cards[cardId].card.LandingPageCard("close");
-            }
+            this.closeAllCards();
 
             $(document).off("kbaseCardClosed");
             this.$elem.empty();

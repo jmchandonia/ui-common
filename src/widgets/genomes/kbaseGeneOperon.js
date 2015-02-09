@@ -31,7 +31,6 @@
         },
 
         cdmiURL: "https://kbase.us/services/cdmi_api",
-        workspaceURL: "https://kbase.us/services/workspace",
         proteinInfoURL: "https://kbase.us/services/protein_info_service",
 
         init: function(options) {
@@ -49,37 +48,9 @@
 
             this.cdmiClient = new CDMI_API(this.cdmiURL);
             this.entityClient = new CDMI_EntityAPI(this.cdmiURL);
-            this.workspaceClient = new workspaceService(this.workspaceURL);
             this.proteinInfoClient = new ProteinInfo(this.proteinInfoURL);
 
             return this.render();
-        },
-
-        renderOld: function(options) {
-            if (this.options.loadingImage)
-                this.showMessage("<img src='" + this.options.loadingImage + "'/>");
-
-            var self = this;
-            this.proteinInfoClient.fids_to_operons([this.options.featureID],
-                function(operons) {
-                    operons = operons[self.options.featureID];
-
-                    var operonStr = "Feature not part of an operon.";
-                    if (operons && operons.length > 1) {
-                        operonStr = "";
-                        for (var i in operons) {
-                            operonStr += operons[i] + " ";
-                        }
-                    }
-                    self.$elem.append(operonStr);
-
-                    self.hideMessage();
-                },
-
-                this.clientError
-            );
-
-            return this;
         },
 
         /**
@@ -89,14 +60,12 @@
             if (this.options.loadingImage)
                 this.showMessage("<img src='" + this.options.loadingImage + "'/>");
 
-
-
             var self = this;
             this.proteinInfoClient.fids_to_operons([this.options.featureID],
                 function(operon) {
                     operon = operon[self.options.featureID];
 
-                    var operonStr = "Feature not part of an operon.";
+                    var operonStr = "Feature is not part of an operon.";
                     if (operon && operon.length > 1) {
                         // tooltip inspired from
                         // https://gist.github.com/1016860
@@ -136,13 +105,21 @@
                         //     operonStr += operons[i] + " ";
                         // }
                     }
-                    else
+                    else {
                         self.$elem.append(operonStr);
-
+                    }
+                    
                     self.hideMessage();
-                },
 
-                this.clientError
+                },
+                function (err) {
+                    // there is a bug in the protein info service, in which if a fid cannot be mapped to a microbes online ID,
+                    // then the function throws an error.  In this case, we should provide a message, but it shouldn't look like an error
+                    self.hideMessage();
+                    self.$elem.append("Gene cannot be mapped to an operon.  Operons may not be fully computed for this Genome.");
+                    console.log("Caught error in protein info service, which can happen if the fid cannot be mapped to a mo id:"+JSON.stringify(err))
+                }
+                //this.clientError
             );
 
 

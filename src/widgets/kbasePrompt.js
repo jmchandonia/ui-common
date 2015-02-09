@@ -60,7 +60,7 @@
 
         version: "1.0.0",
         options: {
-            controls : ['cancelButton', 'okayButton'],
+            controls : ['closeButton'],  // Fixme: why would we want both cancel and ok?  Need 'primary' close button
             modalClass : 'fade',
         },
 
@@ -87,6 +87,7 @@
                 }
             }
         },
+
         okayButton : function() {
             return {
                 name: 'Okay',
@@ -96,9 +97,17 @@
                 }
             }
         },
+        closeButton : function() {
+            return {
+                name: 'Close',
+                type : 'primary',
+                callback : function (e, $prompt) {
+                    $prompt.closePrompt();
+                }
+            }
+        },
 
         dialogModal : function () {
-
             if (this.data('dialogModal') != undefined) {
                 return this.data('dialogModal');
             }
@@ -185,6 +194,7 @@
                 $dialogModal.data('footer').append(this.options.footer);
             }
 
+
             var $prompt = this;
 
             $.each(
@@ -200,7 +210,7 @@
 
                     var $button =
                         $('<a></a>')
-                            .attr('href', '#')
+                            //.attr('href', '#')
                             .attr('class', btnClass)
                             .append(val.name)
                             .bind('click',
@@ -258,6 +268,8 @@
                 )
             );
 
+
+
             /*$dialogModal.find('input[type=text],input[type=password]').last().keypress(
                 $.proxy(
                     function(e) {
@@ -274,6 +286,62 @@
             return $dialogModal;
 
         },
+
+        addAlert : function(text, type) {
+            if (this.data('dialogModal').find('.alert')) {
+                this.rmAlert();
+            }
+
+            var ele = $('<div class="alert'+(type ? ' alert-'+type : ' alert-danger')+'">'+text+'</div>');
+
+            if (text) {
+                this.data('dialogModal').find('.modal-body').prepend(ele);                
+            }            
+
+           return this;
+        },
+
+        rmAlert : function(text) {
+            this.data('dialogModal').find('.alert').remove();
+
+           return this;
+        },
+
+        addCover : function(text) {
+            if (this.data('dialogModal').find('.modal-cover')) {
+                this.rmCover();
+            }
+
+            var ele = $('<div class="modal-cover"> \
+                             <div class="modal-cover-table"> \
+                               <div class="modal-cover-cell"> \
+                                 <span class="modal-cover-box">'+
+                                 '</span> \
+                               </div> \
+                             </div> \
+                           </div>');
+            ele.hide();
+
+            if (text) {
+                ele.find('.modal-cover-box').html(text)
+                ele.show();                
+            }
+
+            $('.modal-body').append(ele);
+
+            return this;
+        },
+        
+        getCover : function() {
+            return this.data('dialogModal').find('.modal-cover-box');
+        },
+
+
+        rmCover : function(text) {
+            this.data('dialogModal').find('.modal-cover').remove();
+
+            return this;
+        },            
 
     });
 

@@ -1,4 +1,4 @@
-var newWorkspaceServiceUrlForSpec = 'http://140.221.84.170:7058/';
+var newWorkspaceServiceUrlForSpec = 'https://kbase.us/services/ws'; //'http://140.221.84.209:7058/';
 //var newWorkspaceServiceUrlForSpec = 'http://Romans-MacBook-Pro-4.local:9999/';
 
 PR['registerLangHandler'](
@@ -38,8 +38,17 @@ function replaceMarkedTypeLinksInSpec(curModule, specText, aClass) {
     	if (module === curModule) {
     		name = name.substr(name.indexOf('.') + 1);
     	}
-    	var link = '<a class="'+aClass+'" data-typeid="'+id+'">'+name+'</a>';
+    	var link = '<a onclick="specClicks[\''+aClass+'\'](this,event); return false;" data-typeid="'+id+'">'+name+'</a>';
     	specText = specText.substr(0, pos) + link + specText.substr(pos + m.length);
     }
     return specText;
 }
+
+var lastGeneratedSpecPrefix = 0;
+
+var generateSpecPrefix = function() {
+	lastGeneratedSpecPrefix++;
+	return lastGeneratedSpecPrefix;
+};
+
+var specClicks = {};

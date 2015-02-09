@@ -26,7 +26,7 @@ $.KBWidget({
         var container = this.$elem
         container.html('<div id="core-model"></div>');
 
-            var flux_threshold = 0.001;
+        var flux_threshold = 0.001;
         var heat_colors = ['#731d1d','#8a2424', '#b35050', '#d05060', '#f28e8e'];
         var neg_heat_colors = ['#4f4f04','#7c7c07', '#8b8d08', '#acc474', '#dded00'];
         var gapfill_color = '#f000ff';
@@ -60,7 +60,7 @@ $.KBWidget({
             for (var i in models) {
                 org_names.push(models[i].name)
             }
-            console.log('MODELS!,', models)
+
             // Adding data structures to core data or each organism
             for (var i in core) {
                 var obj = core[i];
@@ -72,13 +72,14 @@ $.KBWidget({
                 }
             }
 
+            // for each model, join fba data to model data...  yeah.
             for (var n in models) {
                 var model = models[n];
                 rxn_list = model.reactions;
 
                 var model_fba = [];
                 for (var k in fba_data) {
-                    if (fba_data[k].model == model.id ) {
+                    if (fba_data[k].modelref.split('/')[1] == model.id ) {
                         model_fba = fba_data[k];
                     }
                 }
@@ -273,7 +274,7 @@ $.KBWidget({
                     if (orgs[kbid][0]) var org_name = orgs[kbid][0].org_name;
                     else var org_name = ''
 
-                    $(rect.node).popover({content: tip,
+                    $(rect.node).popover({content: tip, animation: false,
                             title: org_name,
                             trigger: 'hover', html: true,
                             container: 'body', placement: 'bottom'});

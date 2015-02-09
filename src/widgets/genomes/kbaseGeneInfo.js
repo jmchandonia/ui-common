@@ -11,19 +11,25 @@
 		parent: "kbaseWidget",
 		version: "1.0.0",
 
+		// the only options are the feature ID, whether it should be embedded in a card, and (optionally) the auth token.
 		options: {
 			featureID: null,
+			genomeID: null,
+			workspaceID: null,
+			kbCache: null,
 			embedInCard: false,
 			auth: null,
 		},
 
 		cdmiURL: "https://kbase.us/services/cdmi_api",
-		workspaceURL: "https://kbase.us/services/workspace",
 
-
+		/**
+		 * Initializes the widget.
+		 */
 		init: function(options) {
 			this._super(options);
 
+			console.log("here!");
 			if (this.options.featureID === null) {
 				//throw an error.
 				return this;
@@ -31,12 +37,15 @@
 
 			this.cdmiClient = new CDMI_API(this.cdmiURL);
 			this.entityClient = new CDMI_EntityAPI(this.cdmiURL);
-			this.workspaceClient = new workspaceService(this.workspaceURL);
 
 			return this.render();
 		},
 
-		render: function(options) {
+		/**
+		 * Renders the widget. This fetches the feature name, type, synonyms, 
+		 * annotations, and any publications from the central store.
+		 */
+		render: function() {
 			/*
 			 * Need to get:
 			 * Feature name
@@ -100,6 +109,12 @@
 			return this;
 		},
 
+		/**
+		 * Returns a data object used for landing pages.
+		 * @returns {Object} the data object used for building a landing page card.
+		 * 
+		 * @public
+		 */
         getData: function() {
             return {
                 type: "Feature",
@@ -109,6 +124,14 @@
             };
         },
 
+        /**
+         * Builds a string for the publication in the given little tuple.
+         * This wraps the publication info into a hyperlink.
+         * @param {string[]} pub - the publication to be wrapped. The first element is ignored, 
+         * the second is the HTML hyperlink address, and the third is the text for the link.
+         * These are taken from the KBase publication type.
+         * @returns {string} an HTML string with a link to the publication.
+         */
 		buildPublicationString: function(pub) {
 			if (pub.length < 3)
 				return "";

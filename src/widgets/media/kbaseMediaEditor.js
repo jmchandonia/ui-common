@@ -8,13 +8,21 @@ $.KBWidget({
     init: function(options) {
         this._super(options);
         var self = this;
-        var media = options.ids[0];
-        var ws = options.workspaces[0];        
-        var mediadata = options.data[0];
+        var media = options.name;
+        var ws = options.ws;        
+
         var container = this.$elem;
-        var fbaserv = new fbaModelServices('http://140.221.85.73:4043/');
-        
-        media_view(container, mediadata);
+
+        container.loading();
+        var prom = kb.fba.get_media({medias: [media], workspaces: [ws]})
+        $.when(prom).done(function(data) {
+            container.rmLoading();
+            var mediadata = data[0];  // fixme: refactor 
+
+            media_view(container, data[0]);
+        })
+
+
 
         function media_view(container, data) {
             $('.loader-rxn').remove();
@@ -157,7 +165,7 @@ $.KBWidget({
                 minflux.push(data.media_compounds[i].min_flux);
                 maxflux.push(data.media_compounds[i].max_flux);
             }
-            var ajax = fbaserv.addmedia({
+            var ajax = kb.fba.addmedia({
                 media: data.wsid,
                 workspace: data.ws,
                 name: data.name,
