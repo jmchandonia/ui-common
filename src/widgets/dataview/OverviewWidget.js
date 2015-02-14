@@ -1,4 +1,4 @@
-define(['kb.widget.dataview.base', 'kb.utils.api', 'kbaseutils', 'kbasesession', 'kbc_Workspace', 'kbasenavbar', 'q'],
+define(['kb.widget.dataview.base', 'kb.utils.api', 'kb.utils', 'kb.session', 'kb.client.workspace', 'kb.widget.navbar', 'q'],
    function (DataviewWidget, APIUtils, Utils, Session, WorkspaceService, Navbar, Q) {
       "use strict";
       var widget = Object.create(DataviewWidget, {
@@ -8,11 +8,40 @@ define(['kb.widget.dataview.base', 'kb.utils.api', 'kbaseutils', 'kbasesession',
                cfg.title = 'Data Object Summary';
                this.DataviewWidget_init(cfg);
 
+               
+               
+               
+               var monthLookup = ["Jan", "Feb", "Mar","Apr", "May", "Jun", "Jul", "Aug", "Sep","Oct", "Nov", "Dec"];
                this.templates.env.addFilter('dateFormat', function (dateString) {
                   if (Utils.isBlank(dateString)) {
                      return '';
                   } else {
-                     return Utils.niceElapsedTime(dateString);
+                     // not sure where utils is coming from, but it doesn't work in safari because the workspace timestamp, despite
+                     // being properly formatted iso timestamp, for whatever reason doesn't work in safari.  This is a fix we've added
+                     // in a number of places now- ug we so need a refactor --mike
+                     
+                     // edited from: http://stackoverflow.com/questions/3177836/how-to-format-time-since-xxx-e-g-4-minutes-ago-similar-to-stack-exchange-site
+                     var date = new Date(dateString);
+                     var seconds = Math.floor((new Date() - date) / 1000);
+            
+                     // f-ing safari, need to add extra ':' delimiter to parse the timestamp
+                     if (isNaN(seconds)) {
+                         var tokens = dateString.split('+');  // this is just the date without the GMT offset
+                         var newTimestamp = tokens[0] + '+'+tokens[0].substr(0,2) + ":" + tokens[1].substr(2,2);
+                         date = new Date(dateString);
+                         seconds = Math.floor((new Date() - date) / 1000);
+                         if (isNaN(seconds)) {
+                             // just in case that didn't work either, then parse without the timezone offset, but
+                             // then just show the day and forget the fancy stuff...
+                             date = new Date(tokens[0]);
+                             return monthLookup[date.getMonth()]+" "+date.getDate()+", "+date.getFullYear();
+                         }
+                     }
+                     
+                     // keep it simple, just give a date without time: look in narrative data list if we want to switch to 'time ago' format.
+                     return monthLookup[date.getMonth()]+" "+date.getDate()+", "+date.getFullYear();
+                  
+                     //return Utils.niceElapsedTime(dateString);
                   }
                }.bind(this));
                this.templates.env.addFilter('fileSizeFormat', function (numberString) {
@@ -267,14 +296,104 @@ define(['kb.widget.dataview.base', 'kb.utils.api', 'kbaseutils', 'kbasesession',
             }
          },
          
-//         checkRefCountAndFetchReferences: {
-//             value: function () {
-//                 Utils.promise(this.workspaceClient,
-//                         'list_referencing_objects_counts',
-//                         [{ref: }])
-//             }
-//         }
-//         
+         checkRefCountAndFetchOutgoingReferences: {
+             value: function () {
+                 Utils.promise(this.workspaceClient,
+                         'get_object_provenance', [{ref: this.getObjectRef()}])
+                 .then(function(provdata) {
+                     var refs = provdata[0].refs;
+                     var prov = provdata[0].provenance;
+                     for (var i = 0; i < prov.length; i++) {
+                         refs = refs.concat(prov[i].resolved_ws_objects);
+                     }
+                     if (refs.length > 100) {
+                         this.setState('too_many_out_refs', true);
+                     } else {
+                         this.setState('too_many_out_refs', false);
+                         this.fetchOutgoingReferences(refs);
+                     }
+                 }.bind(this))
+                 .catch(function(err) {
+                     this.setError('client', err);
+                 }.bind(this))
+                 .done();
+             }
+         },
+         
+         fetchOutgoingReferences: {
+             value: function(reflist) {
+                 //really need a ws method to get referenced object info
+                 //do to this correctly. For now, just dump the reference
+                 //if it's not visible
+                 if (reflist.length < 1) {
+                     return;
+                 }
+                 var objids = []
+                 for (var i = 0; i < reflist.length; i++) {
+                     objids.push({ref: reflist[i]});
+                 }
+                 Utils.promise(this.workspaceClient, 'get_object_info_new',
+                         {objects: objids, ignoreErrors: 1})
+                 .then(function (dataList) {
+                     var refs = [];
+                     if (dataList) {
+                         for(var i = 0; i < dataList.length; i++) {
+                             if (dataList[i]) { // null if not visible
+                                 refs.push(APIUtils.object_info_to_object(
+                                         dataList[i]));
+                             }
+                         }
+                     }
+                     this.setState('out_references', refs.sort(
+                             function (a,b) {return b.name - a.name}));
+                 }.bind(this))
+                 .catch(function (err) {
+                     this.setError('client', err);
+                 }.bind(this))
+                 .done();
+             }
+         },
+         
+         checkRefCountAndFetchReferences: {
+             value: function () {
+                 Utils.promise(this.workspaceClient,
+                         'list_referencing_object_counts',
+                         [{ref: this.getObjectRef()}])
+                 .then(function(sizes) {
+                     if (sizes[0] > 100) {
+                         this.setState('too_many_inc_refs', true);
+                     } else {
+                         this.setState('too_many_inc_refs', false);
+                         this.fetchReferences();
+                     }
+                 }.bind(this))
+                 .catch(function(err) {
+                     this.setError('client', err);
+                 }.bind(this))
+                 .done();
+             }
+         },
+         
+         setError: {
+             value: function(type, error) {
+                 this.setState('status', 'error');
+                 var err = error.error;
+                 console.error(err);
+                 var message;
+                 if (typeof err == "string") {
+                     message = err;
+                 } else {
+                     message = err.message;
+                 }
+                 this.setState('error', {
+                     type: type,
+                     code: 'error',
+                     shortMessage: 'An unexpected error occured',
+                     originalMessage: message
+                 });
+             }
+         },
+         
          fetchReferences: {
             value: function () {
                Utils.promise(this.workspaceClient, 'list_referencing_objects',
@@ -287,12 +406,11 @@ define(['kb.widget.dataview.base', 'kb.utils.api', 'kbaseutils', 'kbasesession',
                         refs.push(APIUtils.object_info_to_object(dataList[0][i]));
                      }
                   }
-                  this.setState('references', refs.sort(function (a,b) {return b.name - a.name}));
+                  this.setState('inc_references', refs.sort(function (a,b) {return b.name - a.name}));
                }.bind(this))
                .catch(function (err) {
-                  console.log('ERROR'); 
-                  console.log(err);
-               })
+                  this.setError('client', err);
+               }.bind(this))
                .done();
             }
          },
@@ -394,8 +512,8 @@ define(['kb.widget.dataview.base', 'kb.utils.api', 'kbaseutils', 'kbasesession',
                                  this.fetchVersions();
                                  
                                  // Get the references to this object
-                                 this.fetchReferences();
-                              
+                                 this.checkRefCountAndFetchReferences();
+                                 this.checkRefCountAndFetchOutgoingReferences();
                               
                                  // Other narratives this user has.
                                  Utils.promise(this.workspaceClient, 'list_workspace_info', {

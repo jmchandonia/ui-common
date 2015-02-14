@@ -1,4 +1,4 @@
-define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api', 'kbaseuserprofile', 'kbc_Workspace', 'postal', 'json!functional-site/config.json'],
+define(['nunjucks', 'jquery', 'q', 'kb.session', 'kb.utils', 'kb.utils.api', 'kb.user_profile', 'kb.client.workspace', 'postal', 'json!functional-site/config.json'],
    function (nunjucks, $, Q, Session, Utils, APIUtils,  UserProfile, Workspace, Postal, config) {
       "use strict";
       var DashboardWidget = Object.create({}, {
@@ -137,19 +137,70 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
                 this.templates.env.addFilter('jsDatestring', function (dateString) {
                   return Utils.iso8601ToDate(dateString).toISOString();
                }.bind(this));
-               this.templates.env.addFilter('niceRuntime', function (seconds) {
-                  if (!seconds) {
+               this.templates.env.addFilter('niceRuntime', function (ms) {
+                  if (!ms) {
                      return ''
                   }
+                  var seconds = ms/1000;
                   var minutes = Math.floor(seconds/60);
                   var seconds = seconds % 60;
                   var hours = Math.floor(minutes/60);
                   var minutes = minutes % 60;
                   var days = Math.floor(hours/24);
                   var hours = hours % 24;
+                  var showSeconds = false;
+                   if (days) {
+                     return (days?days+'d':'') + (hours?' '+hours+'h':'')
+                  } else if (hours) {
+                     return (hours?' '+hours+'h':'') + (minutes?' '+minutes+'m':'')
+                  } else {
+                      return (minutes?' '+minutes+'m':'') + (seconds && showSeconds?' '+seconds+'s':'')
+                  }
                   
-                  return (days?days+'d':'') + (hours?' '+hours+'h':'') + (minutes?' '+minutes+'m':'') + (seconds?' '+seconds+'s':'')
+                  // return (days?days+'d':'') + (hours?' '+hours+'h':'') + (minutes?' '+minutes+'m':'') + (seconds && showSeconds?' '+seconds+'s':'')
                }.bind(this));
+               this.templates.env.addFilter('defaultDash', function(x) {
+                  if (x === null || x === undefined || (typeof x === 'string' && x.length === 0)) {
+                     return '-';
+                  } else {
+                     return x;
+                  }
+               });
+               this.templates.env.addFilter('isBlank', function (x) {
+                   if (x === null || x === undefined || (typeof x === 'string' && x.length === 0)) {
+                     return true;
+                  } else {
+                     return false;
+                  }
+               });
+                this.templates.env.addFilter('isEmpty', function (x) {
+                   if (x === null || x === undefined || (typeof x === 'string' && x.length === 0)) {
+                     return true;
+                  } else if (x.push && x.pop && x.length === 0) {
+                     return true;
+                  } else if (Object.keys(x).length === 0) {
+                     return true;
+                  } else {
+                     return false;
+                  }
+               });
+               this.templates.env.addFilter('sort', function (x) {
+                  //console.log('X'); console.log(x);
+                  if (typeof x === 'object' && x.pop && x.push) {
+                    // console.log('sorting...');
+                     return x.sort(function (a,b) {
+                        if (a < b) {
+                           return 1;
+                        } else if (a > b) {
+                           return -1;
+                        } else {
+                           return 0;
+                        }
+                     });
+                  } else {
+                     return x;
+                  }
+               });
                
                this.templates.env.addGlobal('randomNumber', function (from, to) {
                   return Math.floor(from + Math.random()*(to - from));
@@ -222,9 +273,15 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
                this.widgetName = this.getConfig('name');
 
                this.widgetTitle = this.getConfig('title');
-
-
                this.instanceId = this.genId();
+               
+               if (!this.hasConfig('stateMachine')) {
+                  throw 'The statemachine was not provided in ' + this.widgetName;
+               } else {
+                  this.viewState = this.getConfig('stateMachine');
+               }
+               
+               // Make sure method hooks are available
 
                return;
             }
@@ -243,11 +300,15 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
                // This creates the initial UI -- loads the css, inserts layout html.
                // For simple widgets this is all the setup needed.
                // For more complex one, parts of the UI may be swapped out.
-               this.setupUI();
+               // console.log('['+this.widgetName+'] starting');
+               this.renderUI();
                this.renderWaitingView();
                this.setInitialState()
                   .then(function () {
-                     return this.refresh()
+                     this.setupUI();
+               }.bind(this))
+                  .then(function () {
+                     this.refresh()
                   }.bind(this))
                   .catch(function (err) {
                      console.log('ERROR');
@@ -268,14 +329,14 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
             }
          },
 
-         setupUI: {
+         renderUI: {
             value: function () {
                this.loadCSS();
                this.renderLayout();
                return this;
             }
          },
-
+         
          stop: {
             value: function () {
                // ???
@@ -340,7 +401,10 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
             value: function () {
                this.setInitialState()
                   .then(function () {
-                     return this.refresh();
+                    this.renderUI();
+                  })
+                  .then(function () {
+                     this.refresh();
                   }.bind(this))
                   .catch(function (err) {
                      this.setError(err);
@@ -375,8 +439,34 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
          setState: {
             value: function (path, value, norefresh) {
                Utils.setProp(this.state, path, value);
+               this.onStateChange();
                if (!norefresh) {
                   this.refresh().done();
+               }
+            }
+         },
+         onStateChange: {
+            value: function () {
+            }
+         },
+         hasState: {
+            value: function (path) {
+               return Utils.hasProp(this.state, path);
+            }
+         },
+         
+         getState: {
+            value: function (path, defaultValue) {
+               return Utils.getProp(this.state, path, defaultValue);
+            }
+         },
+
+         doState: {
+            value: function (path, fun, defaultValue) {
+               if (Utils.hasProp(this.state, path)) {
+                  return fun(Utils.getProp(this.state, path));
+               } else {
+                  return defaultValue;
                }
             }
          },
@@ -574,22 +664,24 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
          // displays the appropriate content.
          render: {
             value: function () {
-               // Generate initial view based on the current state of this widget.
-               // Head off at the pass -- if not logged in, can't show profile.
-               if (this.error) {
-                  this.renderError();
-               } else if (Session.isLoggedIn()) {
-                 this.setTitle(this.widgetTitle);
-                  this.places.content.html(this.renderTemplate('authorized'));
-               } else {
-                  // no profile, no basic aaccount info
-                 this.setTitle(this.widgetTitle);
-                  this.places.content.html(this.renderTemplate('unauthorized'));
+               try {
+                  if (this.error) {
+                     this.renderError();
+                  } else if (Session.isLoggedIn()) {
+                    this.setTitle(this.widgetTitle);
+                     this.places.content.html(this.renderTemplate('authorized'));
+                  } else {
+                     // no profile, no basic aaccount info
+                    this.setTitle(this.widgetTitle);
+                     this.places.content.html(this.renderTemplate('unauthorized'));
+                  }
+                  if (this.afterRender) {
+                     this.afterRender();
+                  }
+                  return this;
+               } catch (ex) {
+                  return 'Error rendering: ' + ex;
                }
-               if (this.afterRender) {
-                  this.afterRender();
-               }
-               return this;
             }
          },
 
@@ -605,6 +697,12 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
                   alert: this.container.find('[data-placeholder="alert"]'),
                   content: this.container.find('[data-placeholder="content"]')
                };
+            }
+         },
+         
+         setupUI: {
+            value: function () {
+               return;
             }
          },
 
@@ -1004,6 +1102,7 @@ define(['nunjucks', 'jquery', 'q', 'kbasesession', 'kbaseutils', 'kb.utils.api',
                }.bind(this));
             }
          }
+         
 
       });
 
